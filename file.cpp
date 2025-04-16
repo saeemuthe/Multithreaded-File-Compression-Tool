@@ -1,106 +1,102 @@
 #include <iostream>
 #include <fstream>
-#include <vector>
 #include <thread>
-#include <mutex>
+#include <vector>
 #include <zlib.h>
+#include <string>
+#include <chrono>
 
-using namespace std;
-
-const int CHUNK_SIZE = 1024 * 1024; // 1 MB
-mutex file_mutex;
-
-// Function to compress a chunk of data
-void compressChunk(const vector<char>& input, vector<char>& output) {
-    uLongf compressedSize = compressBound(input.size());
-    output.resize(compressedSize);
-
-    if (compress((Bytef*)output.data(), &compressedSize, (const Bytef*)input.data(), input.size()) != Z_OK) {
-        cerr << "Compression failed.\n";
-    }
-    output.resize(compressedSize); // Resize to actual compressed size
-}
-
-// Multithreaded file compression
-void compressFile(const string& inputFile, const string& outputFile) {
-    ifstream inFile(inputFile, ios::binary);
-    ofstream outFile(outputFile, ios::binary);
-    if (!inFile || !outFile) {
-        cerr << "Error opening files.\n";
+void compressFile(const std::string& inputFile, const std::string& outputFile) {
+    std::ifstream inFile(inputFile, std::ios::binary);
+    std::ofstream outFile(outputFile, std::ios::binary);
+    
+    if (!inFile.is_open() || !outFile.is_open()) {
+        std::cerr << "Error opening files!" << std::endl;
         return;
     }
 
-    vector<thread> threads;
-    vector<vector<char>> compressedChunks;
-    int chunkIndex = 0;
+    const size_t bufferSize = 128 * 1024; // 128 KB buffer
+    char* inBuffer = new char[bufferSize];
+    char* outBuffer = new char[bufferSize];
 
-    while (true) {
-        vector<char> buffer(CHUNK_SIZE);
-        inFile.read(buffer.data(), CHUNK_SIZE);
-        streamsize bytesRead = inFile.gcount();
-        if (bytesRead == 0) break;
-
-        buffer.resize(bytesRead);
-        compressedChunks.emplace_back();
-
-        threads.emplace_back([&, chunkIndex]() {
-            compressChunk(buffer, compressedChunks[chunkIndex]);
-
-            lock_guard<mutex> lock(file_mutex);
-            uint32_t size = compressedChunks[chunkIndex].size();
-            outFile.write(reinterpret_cast<char*>(&size), sizeof(size));
-            outFile.write(compressedChunks[chunkIndex].data(), size);
-        });
-
-        chunkIndex++;
-    }
-
-    for (auto& thread : threads) if (thread.joinable()) thread.join();
-    cout << "File compression completed.\n";
-}
-
-// File decompression
-void decompressFile(const string& inputFile, const string& outputFile) {
-    ifstream inFile(inputFile, ios::binary);
-    ofstream outFile(outputFile, ios::binary);
-    if (!inFile || !outFile) {
-        cerr << "Error opening files.\n";
-        return;
-    }
-
-    while (true) {
-        uint32_t compressedSize;
-        inFile.read(reinterpret_cast<char*>(&compressedSize), sizeof(compressedSize));
-        if (inFile.eof()) break;
-
-        vector<char> compressedData(compressedSize);
-        inFile.read(compressedData.data(), compressedSize);
-
-        uLongf decompressedSize = CHUNK_SIZE;
-        vector<char> decompressedData(decompressedSize);
-
-        if (uncompress((Bytef*)decompressedData.data(), &decompressedSize, 
-                       (const Bytef*)compressedData.data(), compressedSize) != Z_OK) {
-            cerr << "Decompression failed.\n";
+    while (inFile.read(inBuffer, bufferSize) || inFile.gcount() > 0) {
+        uLongf compressedSize = bufferSize;
+        if (compress((Bytef*)outBuffer, &compressedSize, (const Bytef*)inBuffer, inFile.gcount()) != Z_OK) {
+            std::cerr << "Compression failed!" << std::endl;
             break;
         }
-
-        outFile.write(decompressedData.data(), decompressedSize);
+        outFile.write(outBuffer, compressedSize);
     }
-    cout << "File decompression completed.\n";
+
+    delete[] inBuffer;
+    delete[] outBuffer;
+    inFile.close();
+    outFile.close();
 }
 
-// Main function
+void decompressFile(const std::string& inputFile, const std::string& outputFile) {
+    std::ifstream inFile(inputFile, std::ios::binary);
+    std::ofstream outFile(outputFile, std::ios::binary);
+    
+    if (!inFile.is_open() || !outFile.is_open()) {
+        std::cerr << "Error opening files!" << std::endl;
+        return;
+    }
+
+    const size_t bufferSize = 128 * 1024; // 128 KB buffer
+    char* inBuffer = new char[bufferSize];
+    char* outBuffer = new char[bufferSize];
+
+    while (inFile.read(inBuffer, bufferSize) || inFile.gcount() > 0) {
+        uLongf decompressedSize = bufferSize;
+        if (uncompress((Bytef*)outBuffer, &decompressedSize, (const Bytef*)inBuffer, inFile.gcount()) != Z_OK) {
+            std::cerr << "Decompression failed!" << std::endl;
+            break;
+        }
+        outFile.write(outBuffer, decompressedSize);
+    }
+
+    delete[] inBuffer;
+    delete[] outBuffer;
+    inFile.close();
+    outFile.close();
+}
+
+void compressFileThreaded(const std::string& inputFile, const std::string& outputFile) {
+    std::thread compressThread(compressFile, inputFile, outputFile);
+    compressThread.join();
+}
+
+void decompressFileThreaded(const std::string& inputFile, const std::string& outputFile) {
+    std::thread decompressThread(decompressFile, inputFile, outputFile);
+    decompressThread.join();
+}
+
 int main() {
-    string inputFile = "input.txt";
-    string compressedFile = "compressed.dat";
-    string decompressedFile = "decompressed.txt";
+    std::string inputFile, outputFile;
+    int choice;
 
-    cout << "Starting compression...\n";
-    compressFile(inputFile, compressedFile);
+    std::cout << "File Compression Tool" << std::endl;
+    std::cout << "1. Compress a file" << std::endl;
+    std::cout << "2. Decompress a file" << std::endl;
+    std::cout << "Enter your choice: ";
+    std::cin >> choice;
+    std::cin.ignore(); // Ignore the newline character left in the input buffer
 
-    cout << "Starting decompression...\n";
-    decompressFile(compressedFile, decompressedFile);
+    std::cout << "Enter input file name: ";
+    std::getline(std::cin, inputFile);
+    std::cout << "Enter output file name: ";
+    std::getline(std::cin, outputFile);
 
-    return 0;
-}
+    auto start = std::chrono::high_resolution_clock::now();
+
+    if (choice == 1) {
+        compressFileThreaded(inputFile, outputFile);
+    } else if (choice == 2) {
+        decompressFileThreaded(inputFile, outputFile);
+    } else {
+        std::cerr << "Invalid choice!" << std::endl;
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std
